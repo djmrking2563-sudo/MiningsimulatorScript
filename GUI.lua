@@ -1,7 +1,7 @@
 local LocalPlayer = game.Players.LocalPlayer
 local SELL_TRESHOLD = getgenv().SellTreshold
 if type(SELL_TRESHOLD) ~= "number" or not (SELL_TRESHOLD > 0) then SELL_TRESHOLD = nil end
-local SellTreshold = (type(getgenv().SellTreshold) == "number" and getgenv().SellTreshold > 0) and getgenv().SellTreshold or 30000
+local SellTreshold = (type(getgenv().SellTreshold) == "number" and getgenv().SellTreshold > 0) and getgenv().SellTreshold or 200
 local Depth = getgenv().Depth or 205
 getgenv().SellTreshold = SELL_TRESHOLD
 getgenv().Depth = Depth
@@ -1404,7 +1404,7 @@ SellInput = SellTab:Input({
 			if t == "" or t == "FULL" or t == "NIL" or t == "MAX" then
 				local _, packMax = GetInventoryAmount()
 				SELL_TRESHOLD = nil
-				SellTreshold = (packMax and packMax > 0) and packMax or 30000
+				SellTreshold = (packMax and packMax > 0) and packMax or 200
 				getgenv().SellTreshold = nil
 				syncingThreshold = true
 				pcall(function() if SellInput then SellInput:Set("FULL") end end)
