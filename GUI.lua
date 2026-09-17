@@ -171,7 +171,7 @@ local sellDbgAt = 0
 
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui", 10)
 local GameGui = PlayerGui:WaitForChild("ScreenGui", 10)
-local StatsFrame2 = GameGui and GameGui:WaitForChild("StatsFrame2", 10)
+local StatsFrame2 = GameGui and GameGui:WaitForChild("StatsFrame", 10)
 local InventoryAmount = StatsFrame2 and StatsFrame2:FindFirstChild("Inventory") and StatsFrame2.Inventory:FindFirstChild("Amount")
 local CoinsAmount = Leaderstats and Leaderstats:WaitForChild("Coins", 10)
 
@@ -187,7 +187,7 @@ local function resolveInventoryLabel()
 	pcall(function()
 		local sg = LocalPlayer.PlayerGui:FindFirstChild("ScreenGui")
 		if sg then
-			local sf2 = sg:FindFirstChild("StatsFrame2")
+			local sf2 = sg:FindFirstChild("StatsFrame") or sg:FindFirstChild("StatsFrame2")
 			local inv = sf2 and sf2:FindFirstChild("Inventory")
 			local amt = inv and inv:FindFirstChild("Amount")
 			if amt and amt.Text then InventoryAmount = amt return amt end
