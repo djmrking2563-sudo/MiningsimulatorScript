@@ -1181,7 +1181,7 @@ local function RecoverFromCollapse(reason)
 		end
 		if gen ~= collapseGen then return end
 
-		local MOVE_DURATION = 7
+		local MOVE_DURATION = 4
 		local MOVE_SPEED = 25
 		local startedAt = os.clock()
 
