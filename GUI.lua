@@ -335,12 +335,16 @@ local function StartAutoSell()
 						else local _, packMax = GetInventoryAmount() if packMax and packMax > 0 then SellTreshold = packMax end end
 					end
 					local curInv, curMax = GetInventoryAmount()
-					if curInv >= SellTreshold then
+local triggerAt = SellTreshold
+if curMax and curMax > 0 and (triggerAt == nil or triggerAt > curMax * 0.95) then
+    triggerAt = math.floor(curMax * 0.95)
+end
+if curInv >= triggerAt then
 					local SavedPosition = HumanoidRootPart.Position
 					local sold = false
 					sellTrip = true
 					print("[MS] Selling: inv " .. tostring(curInv) .. "/" .. tostring(curMax) .. " threshold " .. tostring(SellTreshold))
-					while Toggles["AutoSell"] and gen == sellLoopGen and GetInventoryAmount() >= SellTreshold and not recovering and not collapseRecovering do
+					while Toggles["AutoSell"] and gen == sellLoopGen and GetInventoryAmount() >= triggerAt and not recovering and not collapseRecovering do
     sold = true
     HumanoidRootPart.CFrame = SellArea
     task.wait(0.4)
@@ -477,11 +481,15 @@ local function StartAutoRebirth()
 						end
 						if #parts > 0 then lastMineSpot = HumanoidRootPart.Position TrackArea() end
 						if sellTrip then task.wait(0.3)
-						else
-						do
-							if SELL_TRESHOLD ~= nil then SellTreshold = SELL_TRESHOLD
-							else local _, packMax = GetInventoryAmount() if packMax and packMax > 0 then SellTreshold = packMax end end
-						end
+else
+do
+    if SELL_TRESHOLD ~= nil then SellTreshold = SELL_TRESHOLD
+    else local _, packMax = GetInventoryAmount() 
+        if packMax and packMax > 0 then 
+            SellTreshold = math.floor(packMax * 0.95)
+        end 
+    end
+end
 						local SavedPosition = HumanoidRootPart.Position
 						local sold = false
 						sellTrip = true
