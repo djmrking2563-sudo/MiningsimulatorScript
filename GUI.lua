@@ -114,6 +114,20 @@ end)
 local Remote = nil
 local function EnsureRemote()
 	if Remote then return Remote end
+	-- Priority 1: getsenv method (works in this game)
+	pcall(function()
+		local ClientScript = LocalPlayer.PlayerGui:FindFirstChild("ScreenGui") and LocalPlayer.PlayerGui.ScreenGui:FindFirstChild("ClientScript")
+		if ClientScript and getsenv and getupvalue then
+			local Data = getsenv(ClientScript).updatePasses
+			local Values = getupvalue(Data, 8)
+			if Values and typeof(Values["RemoteEvent"]) == "Instance" and Values["RemoteEvent"]:IsA("RemoteEvent") then
+				Remote = Values["RemoteEvent"]
+				print("[MS] Remote found via getsenv")
+				return Remote
+			end
+		end
+	end)
+	-- Priority 2: Network InvokeServer (fallback)
 	pcall(function()
 		local Network = game:GetService("ReplicatedStorage"):WaitForChild("Network", 5)
 		if Network then
@@ -122,21 +136,9 @@ local function EnsureRemote()
 				Remote = a
 			elseif typeof(b) == "Instance" and b:IsA("RemoteEvent") then
 				Remote = b
-			else
-				Remote = a
 			end
 		end
 	end)
-	if not Remote then
-		pcall(function()
-			local ClientScript = LocalPlayer.PlayerGui:FindFirstChild("ScreenGui") and LocalPlayer.PlayerGui.ScreenGui:FindFirstChild("ClientScript")
-			if ClientScript and getsenv and getupvalue then
-				local Data = getsenv(ClientScript).updatePasses
-				local Values = getupvalue(Data, 8)
-				Remote = Values and Values["RemoteEvent"]
-			end
-		end)
-	end
 	return Remote
 end
 EnsureRemote()
@@ -339,14 +341,15 @@ local function StartAutoSell()
 					sellTrip = true
 					print("[MS] Selling: inv " .. tostring(curInv) .. "/" .. tostring(curMax) .. " threshold " .. tostring(SellTreshold))
 					while Toggles["AutoSell"] and gen == sellLoopGen and GetInventoryAmount() >= SellTreshold and not recovering and not collapseRecovering do
-						sold = true
-						Remote:FireServer("SellItems", {{}})
-						HumanoidRootPart.CFrame = SellArea
-						task.wait()
-						local freshChar = LocalPlayer.Character
-						local freshHRP = freshChar and freshChar:FindFirstChild("HumanoidRootPart")
-						if freshHRP and freshHRP ~= HumanoidRootPart then break end
-					end
+    sold = true
+    HumanoidRootPart.CFrame = SellArea
+    task.wait(0.4)
+    Remote:FireServer("SellItems", {{}})
+    task.wait(0.4)
+    local freshChar = LocalPlayer.Character
+    local freshHRP = freshChar and freshChar:FindFirstChild("HumanoidRootPart")
+    if freshHRP and freshHRP ~= HumanoidRootPart then break end
+end
 					if sold then
 						local freshChar = LocalPlayer.Character
 						local freshHRP = freshChar and freshChar:FindFirstChild("HumanoidRootPart")
@@ -483,14 +486,16 @@ local function StartAutoRebirth()
 						local sold = false
 						sellTrip = true
 						while Toggles["AutoRebirth"] and run == rebirthRunId and GetInventoryAmount() >= SellTreshold and not recovering and not collapseRecovering do
-							sold = true
-							Remote:FireServer("SellItems", {{}})
-							HumanoidRootPart.CFrame = SellArea
-							task.wait()
-							local freshChar = LocalPlayer.Character
-							local freshHRP = freshChar and freshChar:FindFirstChild("HumanoidRootPart")
-							if freshHRP and freshHRP ~= HumanoidRootPart then break end
-						end
+    sold = true
+    HumanoidRootPart.CFrame = SellArea
+    task.wait(0.4)
+    Remote:FireServer("SellItems", {{}})
+    task.wait(0.4)
+    local freshChar = LocalPlayer.Character
+    local freshHRP = freshChar and freshChar:FindFirstChild("HumanoidRootPart")
+    if freshHRP and freshHRP ~= HumanoidRootPart then break end
+end
+
 						if sold then
 							local freshChar = LocalPlayer.Character
 							local freshHRP = freshChar and freshChar:FindFirstChild("HumanoidRootPart")
