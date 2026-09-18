@@ -1618,10 +1618,7 @@ local Window = WindUI:CreateWindow({
 })
 getgenv().__MS_WindUIWindow = Window
 
-task.spawn(function()
-	task.wait(1.2)
-	PaintWindow(getgenv().__MS_Color or "Pink")
-end)
+
 
 local MineTab = Window:Tab({ Title = "Mining", Icon = "pickaxe" })
 local SellTab = Window:Tab({ Title = "Sell", Icon = "coins" })
@@ -1789,16 +1786,6 @@ local AFKToggle = AFKTab:Toggle({
 })
 AFK_ToggleRef = AFKToggle
 
-AreasTab:Dropdown({
-	Title = "Theme Color",
-	Desc = "Change the GUI color",
-	Values = { "Pink", "HotPink", "Purple", "Blue", "Cyan", "Green", "Red", "Orange", "Yellow", "White" },
-	Value = getgenv().__MS_Color or "Pink",
-	Callback = function(selected)
-		getgenv().__MS_Color = selected
-		PaintWindow(selected)
-	end
-})
 
 MineTab:Toggle({
 	Title = "Auto Mine (straight down)",
