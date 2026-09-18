@@ -387,7 +387,6 @@ local function StartAutoSell()
 		print("[MS] AutoSell off")
 	end)
 end
-
 local rebirthRunId = 0
 local rebirthPhaseText = "off"
 rebirthDigging = false
@@ -475,7 +474,7 @@ local function StartAutoRebirth()
 							task.wait()
 						end
 						if #parts > 0 then lastMineSpot = HumanoidRootPart.Position TrackArea() end
-						if sellTrip then task.wait(0.3) else
+						if false then task.wait(0.3) else
     local SavedPosition = HumanoidRootPart.Position
     local sold = false
     sellTrip = true
@@ -505,6 +504,22 @@ local function StartAutoRebirth()
     end
     sellTrip = false
 end
+
+						if sold then
+							local freshChar = LocalPlayer.Character
+							local freshHRP = freshChar and freshChar:FindFirstChild("HumanoidRootPart")
+							if freshHRP then
+								for _ = 1, 3 do
+									freshHRP.CFrame = CFrame.new(SavedPosition)
+									task.wait(0.3)
+									freshChar = LocalPlayer.Character
+									freshHRP = freshChar and freshChar:FindFirstChild("HumanoidRootPart")
+									if freshHRP and (freshHRP.Position - SavedPosition).Magnitude <= 15 then break end
+								end
+							end
+						end
+						sellTrip = false
+						end
 					end
 				end
 				task.wait()
@@ -703,3 +718,855 @@ local function discoverShop()
 end
 
 local bestToolName
+local function ownedToolIndex(shop)
+	local ok, idx = pcall(function()
+		local pd = playerDataTable()
+		local cur = pd and pd.equipped and pd.equipped[3]
+		if type(cur) ~= "string" or cur == "" then
+			cur = bestToolName()
+			if cur == "?" then return 0 end
+		end
+		if shop then
+			for i, e in ipairs(shop) do
+				if entryName(e, i) == cur then return i end
+			end
+		end
+		return 0
+	end)
+	return (ok and idx) or 0
+end
+
+local function ownedPackIndex(shop)
+	local ok, idx = pcall(function()
+		if not shop then return 0 end
+		local pd = playerDataTable()
+		local cur = pd and pd.equipped and pd.equipped[1]
+		if type(cur) == "string" and cur ~= "" then
+			for i, e in ipairs(shop) do
+				if entryName(e, i) == cur then return i end
+			end
+		end
+		return 0
+	end)
+	return (ok and idx) or 0
+end
+
+local refusedBuy = {}
+local function bestBuy(shop, ownedIdx, startIdx, coins, category)
+	if type(shop) ~= "table" or #shop == 0 then return nil, "NOSHOP" end
+	local pd = playerDataTable()
+	local best, cheapestMissing = nil, nil
+	for i = math.max(ownedIdx + 1, startIdx or 1), #shop do
+		if not refusedBuy[category .. "#" .. i] and not isOwned(shop[i], pd) then
+			local price = shopPrice(shop[i], category)
+			if price ~= nil then
+				if not cheapestMissing then cheapestMissing = price end
+				if price <= coins then best = i end
+			end
+		end
+	end
+	if best then return best, "OK" end
+	if cheapestMissing and cheapestMissing > coins then return nil, "POOR" end
+	return nil, "MAX"
+end
+
+local function toolSignature()
+	local ok, sig = pcall(function()
+		local names = {}
+		local bp = LocalPlayer:FindFirstChild("Backpack")
+		if bp then for _, t in pairs(bp:GetChildren()) do if t:IsA("Tool") then table.insert(names, t.Name) end end end
+		local ch = LocalPlayer.Character
+		if ch then for _, t in pairs(ch:GetChildren()) do if t:IsA("Tool") then table.insert(names, t.Name) end end end
+		table.sort(names)
+		return table.concat(names, "|") .. "#" .. tostring(#names)
+	end)
+	if ok and sig then return sig end
+	return ""
+end
+
+local function packSignature()
+	local ok, sig = pcall(function()
+		local _, mx = GetInventoryAmount()
+		local extra = ""
+		local ls = LocalPlayer:FindFirstChild("leaderstats")
+		if ls then for _, v in pairs(ls:GetChildren()) do
+			if tostring(v.Name):lower():find("pack") and (v:IsA("IntValue") or v:IsA("NumberValue") or v:IsA("StringValue")) then
+				extra = extra .. "=" .. tostring(v.Value)
+			end
+		end end
+		return "max" .. tostring(mx) .. extra
+	end)
+	if ok and sig then return sig end
+	return ""
+end
+
+function bestToolName()
+	local ok, name = pcall(function()
+		local ch = LocalPlayer.Character
+		if ch then for _, t in pairs(ch:GetChildren()) do if t:IsA("Tool") then return t.Name end end end
+		local bp = LocalPlayer:FindFirstChild("Backpack")
+		if bp then for _, t in pairs(bp:GetChildren()) do if t:IsA("Tool") then return t.Name end end end
+		return "?"
+	end)
+	if ok and name then return name end
+	return "?"
+end
+
+local function awaitChange(sigFn, before, timeout)
+	local t0 = os.clock()
+	while os.clock() - t0 < (timeout or 1.2) do
+		task.wait(0.15)
+		local ok, now = pcall(sigFn)
+		if ok and now ~= before then return true end
+	end
+	return false
+end
+
+local function snapTool()
+	local ok, s = pcall(function()
+		local pd = playerDataTable()
+		local eq = pd and pd.equipped
+		return {
+			sig = toolSignature(),
+			eq = (eq and eq[3]) or nil,
+			coins = GetCoinsAmount(),
+			rb = Rebirths and Rebirths.Value or 0,
+		}
+	end)
+	return ok and s or nil
+end
+local function toolChanged(a, b)
+	if not a or not b then return false end
+	if a.sig ~= b.sig then return true end
+	if a.eq ~= b.eq then return true end
+	if b.rb == a.rb and (a.coins - b.coins) > 0 then return true end
+	return false
+end
+local function awaitTool(before, timeout)
+	local t0 = os.clock()
+	while os.clock() - t0 < (timeout or 0.9) do
+		task.wait(0.1)
+		if toolChanged(before, snapTool()) then return true end
+	end
+	return false
+end
+
+local function snapPack()
+	local ok, s = pcall(function()
+		local pd = playerDataTable()
+		local eq = pd and pd.equipped
+		return {
+			sig = packSignature(),
+			eq = (eq and eq[1]) or nil,
+			coins = GetCoinsAmount(),
+			rb = Rebirths and Rebirths.Value or 0,
+		}
+	end)
+	return ok and s or nil
+end
+local function packChanged(a, b)
+	if not a or not b then return false end
+	if a.sig ~= b.sig then return true end
+	if a.eq ~= b.eq then return true end
+	if b.rb == a.rb and (a.coins - b.coins) > 0 then return true end
+	return false
+end
+local function awaitPack(before, timeout)
+	local t0 = os.clock()
+	while os.clock() - t0 < (timeout or 0.9) do
+		task.wait(0.1)
+		if packChanged(before, snapPack()) then return true end
+	end
+	return false
+end
+
+local function StartAutoBackpack()
+	local mem = 3
+	local fails = 0
+	local timeoutIdx, timeoutStreak = nil, 0
+	if getgenv().__MS_BackpackRunning then return end
+	getgenv().__MS_BackpackRunning = true
+	task.spawn(function()
+		while Toggles["AutoBackpack"] and getgenv().__MS_Gen == myGen do
+			if areaTransit or recovering or collapseRecovering then task.wait(0.5)
+			else
+			if not Remote then EnsureRemote() end
+			if not Remote then task.wait(1)
+			else
+				local bought = 0
+				local shop = discoverShop().packs
+				if shop then
+					local chained = 0
+					while Toggles["AutoBackpack"] and chained < 10 do
+						local coins = GetCoinsAmount()
+						local owned = ownedPackIndex(shop)
+						local idx, why = bestBuy(shop, owned, 3, coins, "Backpack")
+						if not idx then
+							lastBoughtPackText = (why == "MAX") and "MAX (best owned)" or "saving (next too pricey)"
+							break
+						end
+						local before = snapPack()
+						buyPause, buyPauseAt = true, os.clock()
+						Remote:FireServer("BuyItem", {{"Backpack", idx}})
+						local changed = awaitPack(before, 0.9)
+						buyPause = false
+						if changed then
+							bought = bought + 1
+							chained = chained + 1
+							lastBoughtPackText = "Pack #" .. tostring(idx)
+							mem = idx + 1
+							timeoutIdx, timeoutStreak = nil, 0
+						elseif timeoutIdx == idx then
+							timeoutStreak = timeoutStreak + 1
+							if timeoutStreak >= 3 then
+								refusedBuy["Backpack#" .. idx] = true
+								mem = idx + 1
+								timeoutIdx, timeoutStreak = nil, 0
+							end
+							break
+						else
+							timeoutIdx, timeoutStreak = idx, 1
+							break
+						end
+					end
+					gearPackText = "max " .. tostring(select(2, GetInventoryAmount()))
+				end
+				if not shop then
+					local tries, i = 0, mem
+					while Toggles["AutoBackpack"] and tries < 10 and i <= 50 do
+						local before = snapPack()
+						buyPause, buyPauseAt = true, os.clock()
+						Remote:FireServer("BuyItem", {{"Backpack", i}})
+						task.wait(0.3)
+						buyPause = false
+						tries = tries + 1
+						if packChanged(before, snapPack()) then
+							bought = bought + 1
+							lastBoughtPackText = "Pack #" .. tostring(i)
+							mem = i + 1
+						else
+							mem = i + 1
+						end
+						i = i + 1
+					end
+					if mem > 50 then mem = 3 end
+					gearPackText = "max " .. tostring(select(2, GetInventoryAmount()))
+				end
+				fails = (bought == 0) and fails + 1 or 0
+				if bought == 0 and fails >= 3 and lastBoughtPackText == "none yet" then lastBoughtPackText = "MAX / nothing to buy" end
+				task.wait(bought > 0 and 0.1 or math.min(2 + fails * 2, 12))
+			end
+			end
+		end
+		getgenv().__MS_BackpackRunning = false
+	end)
+end
+
+local function StartAutoTools()
+	local mem = 1
+	local fails = 0
+	local timeoutIdx, timeoutStreak = nil, 0
+	if getgenv().__MS_ToolsRunning then return end
+	getgenv().__MS_ToolsRunning = true
+	task.spawn(function()
+		while Toggles["AutoTools"] and getgenv().__MS_Gen == myGen do
+			if areaTransit or recovering or collapseRecovering then task.wait(0.5)
+			else
+			if not Remote then EnsureRemote() end
+			if not Remote then task.wait(1)
+			else
+				local bought = 0
+				local shop = discoverShop().tools
+				if shop then
+					local chained = 0
+					while Toggles["AutoTools"] and chained < 10 do
+						local coins = GetCoinsAmount()
+						local owned = ownedToolIndex(shop)
+						local idx, why = bestBuy(shop, owned, 1, coins, "Tools")
+						if not idx then
+							lastBoughtToolText = (why == "MAX") and "MAX (best owned)" or "saving (next too pricey)"
+							break
+						end
+						local before = snapTool()
+						buyPause, buyPauseAt = true, os.clock()
+						Remote:FireServer("BuyItem", {{"Tools", idx}})
+						task.wait(0.35)
+						pcall(function()
+							Remote:FireServer("EquipItem", {{"Tools", entryName(shop[idx], idx)}})
+						end)
+						local changed = awaitTool(before, 2.0)
+						buyPause = false
+						if changed then
+							bought = bought + 1
+							chained = chained + 1
+							lastBoughtToolText = "Tool #" .. tostring(idx)
+							gearToolText = bestToolName()
+							mem = idx + 1
+							timeoutIdx, timeoutStreak = nil, 0
+							lastToolTryText = ""
+						else
+							local nowC = GetCoinsAmount()
+							local wasC = (before and before.coins) or 0
+							lastToolTryText = string.format("T#%d ~%s coins %s->%s owned#%s", idx, tostring(shopPrice(shop[idx], "Tools") or "?"), tostring(wasC), tostring(nowC), tostring(owned))
+							if timeoutIdx == idx then
+								timeoutStreak = timeoutStreak + 1
+								if timeoutStreak >= 3 then
+									refusedBuy["Tools#" .. idx] = true
+									mem = idx + 1
+									timeoutIdx, timeoutStreak = nil, 0
+								end
+							else
+								timeoutIdx, timeoutStreak = idx, 1
+							end
+							break
+						end
+					end
+					gearToolText = bestToolName()
+				end
+				if not shop then
+					local tries, i = 0, mem
+					while Toggles["AutoTools"] and tries < 10 and i <= 50 do
+						local before = snapTool()
+						buyPause, buyPauseAt = true, os.clock()
+						Remote:FireServer("BuyItem", {{"Tools", i}})
+						task.wait(0.3)
+						buyPause = false
+						tries = tries + 1
+						if toolChanged(before, snapTool()) then
+							bought = bought + 1
+							lastBoughtToolText = "Tool #" .. tostring(i)
+							gearToolText = bestToolName()
+							mem = i + 1
+						else
+							mem = i + 1
+						end
+						i = i + 1
+					end
+					if mem > 50 then mem = 1 end
+					gearToolText = bestToolName()
+				end
+				fails = (bought == 0) and fails + 1 or 0
+				if bought == 0 and fails >= 3 and lastBoughtToolText == "none yet" then lastBoughtToolText = "MAX / nothing to buy" end
+				task.wait(bought > 0 and 0.1 or math.min(2 + fails * 2, 12))
+			end
+			end
+		end
+		getgenv().__MS_ToolsRunning = false
+	end)
+end
+
+local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
+
+local function StopAreaRun()
+	areaRunId = areaRunId + 1
+	areaPhaseText = "off"
+	areaTransit = false
+	Toggles["AutoRebirth"] = false
+	StopAutoRebirth()
+	pcall(function()
+		local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+		if hum then hum.WalkSpeed, hum.JumpPower = 16, 50 end
+	end)
+end
+local function StartAreaRun(area)
+	areaRunId = areaRunId + 1
+	local run = areaRunId
+	Toggles["AutoRebirth"] = false
+	StopAutoRebirth()
+	areaTransit = true
+	local function clearTransit() if run == areaRunId then areaTransit = false end end
+	task.spawn(function()
+		local function alive() return run == areaRunId end
+		areaPhaseText = area.name .. ": teleporting..."
+		while alive() do
+			if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then break end
+			task.wait(0.5)
+		end
+		if not alive() then clearTransit() return end
+		EnsureRemote()
+		local Character = LocalPlayer.Character
+		local HRP = Character and Character:FindFirstChild("HumanoidRootPart")
+		local hum = Character and Character:FindFirstChildOfClass("Humanoid")
+		if not HRP then areaPhaseText = "no character" clearTransit() return end
+		if hum then hum.WalkSpeed, hum.JumpPower = 0, 0 end
+		if area.moveTo and Remote then
+			HRP.Anchored = true
+			Remote:FireServer("MoveTo", {{area.moveTo}})
+			local arriveFrom = HRP.Position
+			local arrivedAt = os.clock()
+			while os.clock() - arrivedAt < 4 do
+				if (HRP.Position - arriveFrom).Magnitude > 5 then break end
+				task.wait(0.1)
+			end
+			Remote:FireServer("MoveTo", {{"SurfaceSpawn"}})
+			arriveFrom = HRP.Position
+			arrivedAt = os.clock()
+			while os.clock() - arrivedAt < 4 do
+				if (HRP.Position - arriveFrom).Magnitude > 5 then break end
+				task.wait(0.1)
+			end
+			HRP.CFrame = CFrame.new(area.spawn)
+			task.wait(1)
+		end
+		if not alive() then clearTransit() return end
+		HRP.Anchored = true
+		Character = LocalPlayer.Character
+		HRP = Character and Character:FindFirstChild("HumanoidRootPart")
+		if not HRP then areaPhaseText = "no character" clearTransit() return end
+		for _ = 1, 3 do
+			HRP.CFrame = CFrame.new(area.spawn)
+			task.wait(0.5)
+			Character = LocalPlayer.Character
+			HRP = Character and Character:FindFirstChild("HumanoidRootPart")
+			if HRP and (HRP.Position - area.spawn).Magnitude <= 15 then break end
+		end
+		if not HRP or (HRP.Position - area.spawn).Magnitude > 15 then areaPhaseText = "stuck" clearTransit() return end
+		task.wait(0.5)
+		pcall(function()
+			local old = workspace:FindFirstChild("MS_AreaBridge")
+			if old then old:Destroy() end
+			local floor = Instance.new("Part")
+			floor.Name = "MS_AreaBridge"
+			floor.Anchored = true
+			if area.bridgeSize and area.bridgePos then
+				floor.Size = area.bridgeSize
+				floor.Position = area.bridgePos
+			else
+				local a, b = area.spawn, area.walkEnd
+				local dist = (Vector3.new(b.X - a.X, 0, b.Z - a.Z)).Magnitude
+				local mid = (a + b) / 2
+				floor.Size = Vector3.new(12, 1, dist + 30)
+				floor.Position = Vector3.new(mid.X, math.min(a.Y, b.Y) - 4, mid.Z)
+			end
+			floor.Material = Enum.Material.ForceField
+			floor.Parent = workspace
+		end)
+		HRP.Anchored = false
+		if not alive() then clearTransit() return end
+		areaPhaseText = area.name .. ": moving..."
+		local guard = os.clock()
+		while alive() and os.clock() - guard < 120 do
+			Character = LocalPlayer.Character
+			HRP = Character and Character:FindFirstChild("HumanoidRootPart")
+			if not HRP then task.wait(0.5)
+			else
+				local flat = Vector3.new(area.walkEnd.X - HRP.Position.X, 0, area.walkEnd.Z - HRP.Position.Z)
+				if flat.Magnitude <= 1.5 then break end
+				local step = flat.Unit * 0.5
+				HRP.CFrame = CFrame.new(Vector3.new(HRP.Position.X + step.X, area.walkEnd.Y, HRP.Position.Z + step.Z))
+				task.wait(0.01)
+			end
+		end
+		if not alive() then clearTransit() return end
+		areaPhaseText = area.name .. ": to mine spot..."
+		Character = LocalPlayer.Character
+		HRP = Character and Character:FindFirstChild("HumanoidRootPart")
+		if HRP then
+			HRP.Anchored = true
+			for _ = 1, 3 do
+				HRP.CFrame = CFrame.new(area.mine)
+				task.wait(0.5)
+				Character = LocalPlayer.Character
+				HRP = Character and Character:FindFirstChild("HumanoidRootPart")
+				if HRP and (HRP.Position - area.mine).Magnitude <= 15 then break end
+			end
+			if HRP then HRP.Anchored = false end
+		end
+		if not HRP or (HRP.Position - area.mine).Magnitude > 15 then areaPhaseText = "stuck" clearTransit() return end
+		task.wait(0.5)
+		if not alive() then clearTransit() return end
+		areaPhaseText = area.name .. ": running autorebirth..."
+		lastAreaName = area.name
+		TrackArea(true)
+		clearTransit()
+		Toggles["AutoRebirth"] = true
+		StartAutoRebirth()
+	end)
+end
+
+local collapseGen = 0
+local function BlocksNear(pos, radius, maxParts)
+	local ok, parts = pcall(function()
+		local region = Region3.new(pos - Vector3.new(radius, radius, radius), pos + Vector3.new(radius, radius, radius))
+		return workspace:FindPartsInRegion3WithWhiteList(region, {game.Workspace.Blocks}, maxParts or 10)
+	end)
+	if ok and type(parts) == "table" then return #parts end
+	return -1
+end
+
+local function RecoverFromCollapse(reason)
+	collapseGen = collapseGen + 1
+	local gen = collapseGen
+	if collapseRecovering then return end
+	if not (Toggles["AutoMine"] or Toggles["FastMine"] or Toggles["AutoRebirth"] or Toggles["AutoSell"]) then return end
+
+	collapseRecovering = true
+	recovering = true
+	areaTransit = true
+
+	print("[MS] Collapse detected (" .. tostring(reason) .. "). Moving forward for 7s then resuming...")
+	areaPhaseText = "collapsed: moving forward..."
+
+	task.spawn(function()
+		for _ = 1, 30 do
+			if gen ~= collapseGen then return end
+			task.wait(0.5)
+			local done = false
+			pcall(function()
+				local col = workspace:FindFirstChild("Collapsed")
+				if not col or col.Value ~= true then done = true end
+			end)
+			if done then break end
+		end
+		if gen ~= collapseGen then return end
+
+		for _ = 1, 20 do
+			if gen ~= collapseGen then return end
+			if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then break end
+			task.wait(0.5)
+		end
+		if gen ~= collapseGen then return end
+
+		local MOVE_DURATION = 4
+		local MOVE_SPEED = 25
+		local startedAt = os.clock()
+
+		areaPhaseText = "collapsed: moving forward for " .. tostring(MOVE_DURATION) .. "s..."
+		print("[MS] Moving forward for " .. tostring(MOVE_DURATION) .. " seconds...")
+
+		while gen == collapseGen and (os.clock() - startedAt) < MOVE_DURATION do
+			local char = LocalPlayer.Character
+			local hrp = char and char:FindFirstChild("HumanoidRootPart")
+			local hum = char and char:FindFirstChildOfClass("Humanoid")
+			if hrp then
+				pcall(function() hrp.Anchored = false end)
+				local forwardDir = hrp.CFrame.LookVector
+				hrp.CFrame = hrp.CFrame + forwardDir * (MOVE_SPEED * 0.05)
+				if hum then
+					hum.WalkSpeed = 0
+					hum.JumpPower = 0
+				end
+			end
+			task.wait(0.05)
+		end
+
+		if gen ~= collapseGen then return end
+
+		areaPhaseText = "collapsed: dropping into fresh blocks..."
+		local char = LocalPlayer.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		if hrp then
+			pcall(function() hrp.Anchored = false end)
+			hrp.CFrame = hrp.CFrame + Vector3.new(0, -3, 0)
+			task.wait(0.5)
+		end
+
+		local char2 = LocalPlayer.Character
+		local hum2 = char2 and char2:FindFirstChildOfClass("Humanoid")
+		if hum2 then hum2.WalkSpeed, hum2.JumpPower = 16, 50 end
+
+		if gen ~= collapseGen then return end
+
+		collapseRecovering = false
+		recovering = false
+		areaTransit = false
+
+		local finalChar = LocalPlayer.Character
+		local finalHRP = finalChar and finalChar:FindFirstChild("HumanoidRootPart")
+		if finalHRP then
+			lastMineSpot = finalHRP.Position
+		end
+
+		TrackArea(true)
+		areaPhaseText = "recovered, resuming mining..."
+		print("[MS] Move-forward recovery done. Resuming mining.")
+	end)
+end
+
+task.spawn(function()
+	local col = nil
+	pcall(function() col = workspace:WaitForChild("Collapsed", 30) end)
+	if col then
+		col.Changed:Connect(function()
+			local isCol = false
+			pcall(function() isCol = col.Value == true end)
+			if isCol then RecoverFromCollapse("Collapsed=true") end
+		end)
+	else
+		print("[MS] WARNING: workspace.Collapsed not found, using block-watchdog only")
+	end
+	local emptyStreak = 0
+	while true do
+		task.wait(2)
+		pcall(function()
+			local mining = Toggles["AutoMine"] or Toggles["FastMine"] or Toggles["AutoRebirth"]
+			if not mining or collapseRecovering or areaTransit or sellTrip then emptyStreak = 0 return end
+			local h = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+			if not h then emptyStreak = 0 return end
+			local n = BlocksNear(h.Position, 8, 10)
+			if n == 0 then
+				emptyStreak = emptyStreak + 1
+				local colNow = false
+				pcall(function()
+					local c = workspace:FindFirstChild("Collapsed")
+					colNow = c and c.Value == true
+				end)
+				if emptyStreak >= 4 and (colNow or BlocksNear(h.Position, 20, 20) == 0) then
+					emptyStreak = 0
+					RecoverFromCollapse("no-blocks-watchdog")
+				end
+			else
+				emptyStreak = 0
+			end
+		end)
+	end
+end)
+
+local Window = WindUI:CreateWindow({
+	Title = "Mining Simulator",
+	Icon = "pickaxe",
+	Author = "by V444JAA",
+	Folder = "MiningSimGui",
+	Size = UDim2.fromOffset(520, 420),
+	Theme = "Dark",
+	ToggleKey = Enum.KeyCode.LeftShift,
+})
+getgenv().__MS_WindUIWindow = Window
+
+local MineTab = Window:Tab({ Title = "Mining", Icon = "pickaxe" })
+local SellTab = Window:Tab({ Title = "Sell", Icon = "coins" })
+local MiscTab = Window:Tab({ Title = "Shop / Rebirth", Icon = "settings" })
+local AreasTab = Window:Tab({ Title = "Areas", Icon = "map" })
+
+MineTab:Toggle({
+	Title = "Auto Mine (straight down)",
+	Desc = "Mines -1,-10,-1 straight down like AutoRebirth dig",
+	Value = false,
+	Callback = function(state)
+		Toggles["AutoMine"] = state
+		if state then StartAutoMine() end
+	end
+})
+
+MineTab:Toggle({
+	Title = "Fast Mine (aura)",
+	Desc = "Mines everything in 5,5,5 around you",
+	Value = false,
+	Callback = function(state)
+		Toggles["FastMine"] = state
+		if state then StartFastMine() end
+	end
+})
+
+MineTab:Toggle({
+	Title = "Limit depth",
+	Desc = "AutoMine stops once Depth target is reached (off = dig forever)",
+	Value = false,
+	Callback = function(state)
+		Toggles["LimitDepth"] = state
+	end
+})
+
+local MineStatus = MineTab:Paragraph({
+	Title = "Status",
+	Desc = "waiting...",
+})
+
+SellTab:Toggle({
+	Title = "Auto Sell (lava)",
+	Desc = "Sells at 42,14,-1239, returns to your exact spot",
+	Value = false,
+	Callback = function(state)
+		Toggles["AutoSell"] = state
+		if state then StartAutoSell() end
+	end
+})
+
+local syncingThreshold = false
+local sellEchoUntil = 0
+local depthEchoUntil = 0
+local syncingDepth = false
+local SellInput
+local DepthInput
+local SellStatus = SellTab:Paragraph({
+	Title = "Inventory",
+	Desc = "waiting...",
+})
+local function setThreshold(v)
+	SELL_TRESHOLD = v
+	SellTreshold = v
+	getgenv().SellTreshold = v
+	if syncingThreshold then return end
+	syncingThreshold = true
+	pcall(function()
+		if SellInput then SellInput:Set(tostring(v)) end
+	end)
+	syncingThreshold = false
+end
+
+SellInput = SellTab:Input({
+	Title = "Sell Threshold",
+	Desc = "Type a number + ENTER, or FULL.",
+	Type = "Input",
+	Value = SELL_TRESHOLD == nil and "FULL" or tostring(SELL_TRESHOLD),
+	Placeholder = "FULL or number (e.g. 30000)",
+	Callback = function(input)
+		if syncingThreshold then return end
+		local ok, err = pcall(function()
+			local raw = tostring(input or "")
+			local t = raw:upper():gsub("%s+", "")
+			if t == "" or t == "FULL" or t == "NIL" or t == "MAX" then
+				local _, packMax = GetInventoryAmount()
+				SELL_TRESHOLD = nil
+				SellTreshold = (packMax and packMax > 0) and packMax or 200
+				getgenv().SellTreshold = nil
+				syncingThreshold = true
+				pcall(function() if SellInput then SellInput:Set("FULL") end end)
+				syncingThreshold = false
+				sellEchoUntil = os.clock() + 5
+				SellStatus:SetDesc("threshold FULL (got [" .. raw .. "])")
+			else
+				local digits = t:gsub(",", ""):match("%d+")
+				local amount = digits and tonumber(digits)
+				if amount and amount > 0 then
+					setThreshold(math.floor(amount))
+					sellEchoUntil = os.clock() + 5
+					SellStatus:SetDesc("threshold " .. tostring(math.floor(amount)) .. " (got [" .. raw .. "])")
+				else
+					sellEchoUntil = os.clock() + 5
+					SellStatus:SetDesc("ignored [" .. raw .. "] - type a number or FULL")
+				end
+			end
+		end)
+		if not ok then
+			sellEchoUntil = os.clock() + 5
+			pcall(function() SellStatus:SetDesc("input error: " .. tostring(err)) end)
+		end
+	end
+})
+
+MiscTab:Toggle({
+	Title = "Auto Rebirth",
+	Desc = "Full AutoRebirth: dig to Depth, then aura+sell + instant rebirths (no teleport)",
+	Value = false,
+	Callback = function(state)
+		Toggles["AutoRebirth"] = state
+		if state then StartAutoRebirth() else StopAutoRebirth() end
+	end
+})
+
+MiscTab:Toggle({
+	Title = "Rebirth Only",
+	Desc = "Only fires Rebirth when affordable, nothing else",
+	Value = false,
+	Callback = function(state)
+		Toggles["RebirthOnly"] = state
+		if state then StartRebirthOnly() end
+	end
+})
+
+MiscTab:Toggle({
+	Title = "Auto Backpack",
+	Desc = "Buys next missing pack 3-50, stops at MAX",
+	Value = false,
+	Callback = function(state)
+		Toggles["AutoBackpack"] = state
+		if state then StartAutoBackpack() end
+	end
+})
+
+MiscTab:Toggle({
+	Title = "Auto Tools",
+	Desc = "Buys next missing tool 1-50, stops at MAX",
+	Value = false,
+	Callback = function(state)
+		Toggles["AutoTools"] = state
+		if state then StartAutoTools() end
+	end
+})
+
+local MiscStatus = MiscTab:Paragraph({
+	Title = "Depth",
+	Desc = "waiting...",
+})
+
+DepthInput = MiscTab:Input({
+	Title = "Depth",
+	Desc = "Dig target for AutoRebirth (default 205). Type + ENTER.",
+	Type = "Input",
+	Value = tostring(Depth),
+	Placeholder = "e.g. 205",
+	Callback = function(input)
+		if syncingDepth then return end
+		local ok, err = pcall(function()
+			local raw = tostring(input or "")
+			local digits = raw:gsub(",", ""):match("%d+")
+			local typed = digits and tonumber(digits)
+			if typed then
+				Depth = math.clamp(math.floor(typed), 0, 5000)
+				getgenv().Depth = Depth
+				syncingDepth = true
+				pcall(function() if DepthInput then DepthInput:Set(tostring(Depth)) end end)
+				syncingDepth = false
+				depthEchoUntil = os.clock() + 5
+				MiscStatus:SetDesc("depth target " .. tostring(Depth) .. " (got [" .. raw .. "])")
+			else
+				depthEchoUntil = os.clock() + 5
+				MiscStatus:SetDesc("ignored [" .. raw .. "] - type a number")
+			end
+		end)
+		if not ok then
+			depthEchoUntil = os.clock() + 5
+			pcall(function() MiscStatus:SetDesc("input error: " .. tostring(err)) end)
+		end
+	end
+})
+
+local GearStatus = MiscTab:Paragraph({
+	Title = "Gear",
+	Desc = "buyers off",
+})
+
+for _, area in ipairs(Areas) do
+	local a = area
+	AreasTab:Button({
+		Title = "Run " .. a.name,
+		Desc = string.format("Teleport -> walk -> mine @ %d,%d,%d, then full autorebirth", math.floor(a.mine.X), math.floor(a.mine.Y), math.floor(a.mine.Z)),
+		Callback = function()
+			StartAreaRun(a)
+		end
+	})
+end
+AreasTab:Button({
+	Title = "STOP area run",
+	Desc = "Stops movement + full autorebirth, restores walkspeed",
+	Callback = function()
+		StopAreaRun()
+	end
+})
+local AreaStatus = AreasTab:Paragraph({
+	Title = "Area status",
+	Desc = "off",
+})
+
+task.spawn(function()
+	while Window and getgenv().__MS_Gen == myGen do
+		pcall(function()
+			local curInv, maxInv = GetInventoryAmount()
+			local curDepth = GetCurrentDepth()
+			local sellTxt = SELL_TRESHOLD == nil and "FULL" or tostring(SELL_TRESHOLD)
+			MineStatus:SetDesc(string.format("depth %s / target %s", tostring(curDepth), tostring(Depth)))
+			if os.clock() >= sellEchoUntil then
+				SellStatus:SetDesc(string.format("inv %s/%s | threshold %s", tostring(curInv), tostring(maxInv), sellTxt))
+			end
+			if os.clock() >= depthEchoUntil then
+				MiscStatus:SetDesc(string.format("depth %s / target %s | coins %s | rebirth %s", tostring(curDepth), tostring(Depth), tostring(GetCoinsAmount()), tostring(rebirthPhaseText)))
+			end
+			AreaStatus:SetDesc(tostring(areaPhaseText))
+			GearStatus:SetDesc(string.format("tool %s (%s) | pack %s (%s)%s", tostring(gearToolText), tostring(lastBoughtToolText), tostring(gearPackText), tostring(lastBoughtPackText), lastToolTryText ~= "" and (" | " .. lastToolTryText) or ""))
+		end)
+		task.wait(0.5)
+	end
+end)
+
+print("Subscribe to V444JAA")
