@@ -5,7 +5,7 @@ local SellTreshold = (type(getgenv().SellTreshold) == "number" and getgenv().Sel
 local Depth = getgenv().Depth or 205
 getgenv().SellTreshold = SELL_TRESHOLD
 getgenv().Depth = Depth
-local SellArea = CFrame.new(-116, 13, 38)
+-- (SellArea removed — sell pads are per-area now)
 local recovering = false
 local areaTransit = false
 local rebirthDigging = false
@@ -25,8 +25,142 @@ local Areas = {
 	{ name = "Sea",     moveTo = "SeaSpawn",    spawn = Vector3.new(14, 12, 10539),   walkEnd = Vector3.new(17, 13, 11969),   mine = Vector3.new(18, 12, 11949) },
 	{ name = "Beach",   moveTo = "BeachSpawn",  spawn = Vector3.new(19, 14, 14437),   walkEnd = Vector3.new(15, 13, 14374),   mine = Vector3.new(15, 12, 14357) },
 	{ name = "Cavern",  moveTo = "CavernSpawn", spawn = Vector3.new(19, 15, 18461),   walkEnd = Vector3.new(20, 13, 18400),   mine = Vector3.new(21, 12, 18382) },
-	{ name = "MagicForest", moveTo = nil,       spawn = Vector3.new(15, 15, 22461),   walkEnd = Vector3.new(16, 13, 22420),   mine = Vector3.new(17, 12, 22409) },
+		{ name = "MagicForest", moveTo = nil,       spawn = Vector3.new(15, 15, 22461),   walkEnd = Vector3.new(16, 13, 22420),   mine = Vector3.new(17, 12, 22409) },
 }
+
+-- ===== COLOR THEME SYSTEM =====
+local COLOR_PRESETS = {
+	Pink    = Color3.fromRGB(255, 105, 180),
+	HotPink = Color3.fromRGB(255, 20, 147),
+	Purple  = Color3.fromRGB(170, 90, 255),
+	Blue    = Color3.fromRGB(70, 150, 255),
+	Cyan    = Color3.fromRGB(0, 220, 220),
+	Green   = Color3.fromRGB(80, 220, 120),
+	Red     = Color3.fromRGB(255, 70, 70),
+	Orange  = Color3.fromRGB(255, 150, 40),
+	Yellow  = Color3.fromRGB(255, 220, 60),
+	White   = Color3.fromRGB(235, 235, 235),
+}
+
+local function shade(c, f)
+	return Color3.new(
+		math.clamp(c.R * f, 0, 1),
+		math.clamp(c.G * f, 0, 1),
+		math.clamp(c.B * f, 0, 1)
+	)
+end
+
+local function ApplyAccent(root, accent)
+	if not root then return end
+	-- Only proceed if root is a ScreenGui (WindUI's GUI is always a ScreenGui)
+	if not root:IsA("ScreenGui") then return end
+
+	-- if we can't tell, just paint anyway (better saafe than blank)
+
+	local bgDark  = shade(accent, 0.10)
+	local bgMid   = shade(accent, 0.22)
+	local outline = shade(accent, 0.85)
+	local textCol = Color3.new(1, 0.94, 0.98)
+	local changed = 0
+
+			local function paint(inst)
+		pcall(function()
+			-- Hard skip: anything not under a WindUI ScreenGui is ignored
+			local topGui = inst:FindFirstAncestorOfClass("ScreenGui")
+			if topGui and topGui.Name ~= "WindUI" and not topGui.Name:lower():find("wind") then
+				return
+			end
+
+			if inst:IsA("Frame") or inst:IsA("CanvasGroup") or inst:IsA("ScrollingFrame") then
+				-- recolor ANY frame that isn't already bright/colored
+				local bc = inst.BackgroundColor3
+				if bc.R < 0.5 and bc.G < 0.5 and bc.B < 0.5 then
+					inst.BackgroundColor3 = bgDark
+					changed = changed + 1
+				end
+			elseif inst:IsA("TextButton") then
+				inst.TextColor3 = textCol
+				inst.BackgroundColor3 = bgMid
+				changed = changed + 1
+			elseif inst:IsA("TextLabel") or inst:IsA("TextBox") then
+				inst.TextColor3 = textCol
+				changed = changed + 1
+			elseif inst:IsA("ImageLabel") or inst:IsA("ImageButton") then
+				inst.ImageColor3 = accent
+				changed = changed + 1
+			elseif inst:IsA("UIStroke") then
+				inst.Color = outline
+				changed = changed + 1
+			end
+		end)
+		for _, child in ipairs(inst:GetDescendants()) do
+			paint(child)
+		end
+	end
+	paint(root)
+	print("[ApplyAccent] changed " .. tostring(changed) .. " instances")
+end
+
+local function PaintWindow(colorName)
+	local accent = COLOR_PRESETS[colorName] or COLOR_PRESETS.Pink
+	local painted = 0
+
+	local function paintInstance(root)
+		if not root then return end
+		pcall(function()
+			ApplyAccent(root, accent)
+			painted = painted + 1
+		end)
+	end
+
+	-- PATH 1: WindUI's own ScreenGui, found via the Window object's Instance fields
+	-- This is the ONLY reliable source — WindUI stores a reference to its own ScreenGui.
+	pcall(function()
+		local win = getgenv().__MS_WindUIWindow
+		if not win then return end
+		for _, v in pairs(win) do
+			if typeof(v) == "Instance" then
+				if v:IsA("ScreenGui") then
+					paintInstance(v)
+				elseif v.Parent and v.Parent:IsA("ScreenGui") then
+					paintInstance(v.Parent)
+				end
+			end
+		end
+	end)
+
+	-- PATH 2: gethui() — but ONLY ScreenGuis whose PARENT is gethui itself
+	-- (WindUI's ScreenGui is a direct child of gethui on Delta;
+	--  any deeper nested ScreenGui is the game's own, so we skip it)
+	if gethui and painted == 0 then
+		pcall(function()
+			local hui = gethui()
+			if not hui then return end
+			for _, g in ipairs(hui:GetChildren()) do
+				if g:IsA("ScreenGui") and g.Name ~= "DeltaKeyboard" then
+					-- Only accept if this ScreenGui has NO parent chain leading into CoreGui
+					local isGameGui = false
+					pcall(function()
+						local p = g.Parent
+						while p do
+							if p == game:GetService("CoreGui") then isGameGui = true break end
+							p = p.Parent
+						end
+					end)
+					if not isGameGui then
+						paintInstance(g)
+					end
+				end
+			end
+		end)
+	end
+
+	-- NO PATH 3 — CoreGui/PlayerGui are never touched.
+
+	print("[PaintWindow] painted " .. tostring(painted) .. " container(s) with " .. tostring(colorName))
+end
+
+
 local function DetectArea()
 	local h = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
 	if not h then return nil end
@@ -159,7 +293,9 @@ local Toggles = getgenv().__MS_Toggles or {
 	AutoTools = false,
 	AutoRebirth = false,
 	RebirthOnly = false,
-	LimitDepth = false
+	LimitDepth = false,
+	SVSell = false,
+	AntiAFK = false
 }
 for k in pairs(Toggles) do Toggles[k] = false end
 getgenv().__MS_Toggles = Toggles
@@ -185,31 +321,118 @@ local function GetCoinsAmount()
 end
 
 local function resolveInventoryLabel()
-	if InventoryAmount and InventoryAmount.Text then return InventoryAmount end
-	pcall(function()
-		local sg = LocalPlayer.PlayerGui:FindFirstChild("ScreenGui")
-		if sg then
-			local sf2 = sg:FindFirstChild("StatsFrame") or sg:FindFirstChild("StatsFrame2")
-			local inv = sf2 and sf2:FindFirstChild("Inventory")
+	-- always re-find — never trust a cached reference
+	local sg = LocalPlayer.PlayerGui:FindFirstChild("ScreenGui")
+	if not sg then return nil end
+
+	-- prefer StatsFrame (main), then StatsFrame2 (secondary)
+	for _, frameName in ipairs({"StatsFrame", "StatsFrame2"}) do
+		local sf = sg:FindFirstChild(frameName)
+		if sf then
+			local inv = sf:FindFirstChild("Inventory")
 			local amt = inv and inv:FindFirstChild("Amount")
-			if amt and amt.Text then InventoryAmount = amt return amt end
-			local deepInv = sg:FindFirstChild("Inventory", true)
-			local deepAmt = deepInv and deepInv:FindFirstChild("Amount")
-			if deepAmt and deepAmt.Text then InventoryAmount = deepAmt return deepAmt end
+			if amt and amt.Text and amt.Text:find("/") then
+				InventoryAmount = amt  -- refresh cache
+				return amt
+			end
 		end
-	end)
-	return InventoryAmount
+	end
+	return nil
 end
 
 local function GetInventoryAmount()
 	local lbl = resolveInventoryLabel()
 	if not lbl or not lbl.Text then return 0, 0 end
-	local Amount = tostring(lbl.Text)
-	Amount = Amount:gsub('%s+', '')
-	Amount = Amount:gsub(',', '')
-	local Inventory = Amount:split("/")
-	return tonumber(Inventory[1]) or 0, tonumber(Inventory[2]) or 0
+	-- handle commas, spaces, and any non-digit noise
+	local cleaned = tostring(lbl.Text):gsub(",", ""):gsub("%s+", "")
+	local cur, max = cleaned:match("(%d+)/(%d+)")
+	return tonumber(cur) or 0, tonumber(max) or 0
 end
+
+
+-- ===== PER-AREA SELL PADS =====
+local SELL_PADS = {
+	Cyber       = Vector3.new(56, 14, 30176),
+	-- Add more areas as you find their pads:
+	-- Spawn    = Vector3.new(...),
+	-- Space    = Vector3.new(...),
+	-- Candy    = Vector3.new(...),
+	-- Toy      = Vector3.new(...),
+	-- Food     = Vector3.new(...),
+	-- Dino     = Vector3.new(...),
+	-- Sea      = Vector3.new(...),
+	-- Beach    = Vector3.new(...),
+	-- Cavern   = Vector3.new(...),
+	-- MagicForest = Vector3.new(...),
+}
+
+local function GetSellPadPos()
+	if lastAreaName and SELL_PADS[lastAreaName] then
+		return SELL_PADS[lastAreaName]
+	end
+	return Vector3.new(56, 14, 30176)
+end
+
+local function HopOntoSellPad()
+	local char = LocalPlayer.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	if not hum or not hrp then
+		return false
+	end
+
+	sellTrip = true
+
+	local ok, err = pcall(function()
+		local padPos = GetSellPadPos()
+
+		hrp.Anchored = true
+		hrp.CFrame = CFrame.new(padPos)
+		task.wait(0.5)
+		hrp.Anchored = false
+		task.wait(0.3)
+
+		local t0 = os.clock()
+		local dir = 1
+		local step = 1.5
+		local interval = 0.12
+
+		while os.clock() - t0 < 4 do
+			local c = LocalPlayer.Character
+			local h = c and c:FindFirstChild("HumanoidRootPart")
+			if not h then break end
+
+			local offset = Vector3.new(step * dir, 0, 0)
+			dir = -dir
+
+			h.Anchored = true
+			h.CFrame = CFrame.new(padPos) + offset
+			task.wait(interval)
+			h.Anchored = false
+			task.wait(0.05)
+
+			local cur = select(1, GetInventoryAmount())
+			if cur == 0 then break end
+		end
+
+		local c2 = LocalPlayer.Character
+		local h2 = c2 and c2:FindFirstChild("HumanoidRootPart")
+		if h2 then
+			h2.Anchored = true
+			h2.CFrame = CFrame.new(padPos)
+			task.wait(0.2)
+			h2.Anchored = false
+		end
+	end)
+
+			if not ok then
+		print("[MS] HopOntoSellPad error: " .. tostring(err))
+	end
+
+	sellTrip = false
+	return true
+end
+-- ===== END SELL PADS =====
 
 local function StartAutoMine()
 	-- 🔧 Reset stuck state
@@ -314,13 +537,99 @@ local function StartFastMine()
 	end)
 end
 
+local svSellLoopGen = 0
+local function StartSVSell()
+	svSellLoopGen = svSellLoopGen + 1
+	local gen = svSellLoopGen
+	task.spawn(function()
+		print("[MS] SVSell started")
+		while getgenv().__MS_Gen == myGen do
+			local ok, err = pcall(function()
+				if not Toggles["SVSell"] then task.wait(0.5) return end
+				if not Remote then EnsureRemote() end
+				if not Remote then task.wait(1) return end
+				local curInv, curMax = GetInventoryAmount()
+				if not curMax or curMax <= 0 then task.wait(0.5) return end
+				local triggerAt = SELL_TRESHOLD or curMax
+				if curInv >= triggerAt then
+					local Character = LocalPlayer.Character
+					local HumanoidRootPart = Character and Character:FindFirstChild("HumanoidRootPart")
+					if HumanoidRootPart then
+						local SavedLocation = HumanoidRootPart.CFrame
+						local SavedText = InventoryAmount and InventoryAmount.Text or ""
+						local sellStartTime = os.clock()
+						while InventoryAmount and InventoryAmount.Text == SavedText
+							and Toggles["SVSell"]
+							and os.clock() - sellStartTime < 15
+						do
+							HumanoidRootPart.CFrame = CFrame.new(-116, 13, 38)
+							Remote:FireServer("SellItems", {{}})
+							task.wait(0.1)
+						end
+						HumanoidRootPart.Anchored = true
+						HumanoidRootPart.CFrame = SavedLocation
+						task.wait(0.1)
+						HumanoidRootPart.Anchored = false
+						print("[MS] SVSell trip done: inv now " .. tostring(select(1, GetInventoryAmount())) .. " coins " .. tostring(GetCoinsAmount()))
+					end
+				else
+					if os.clock() - sellDbgAt > 15 then
+						sellDbgAt = os.clock()
+						print("[MS] SVSell waiting: inv " .. tostring(curInv) .. "/" .. tostring(curMax))
+					end
+					task.wait(0.5)
+				end
+			end)
+			if not ok then
+				print("[MS] SVSell error: " .. tostring(err))
+				task.wait(1)
+			end
+			task.wait()
+		end
+		print("[MS] SVSell off")
+	end)
+end
+
 local function StartAutoSell()
 	sellLoopGen = sellLoopGen + 1
 	local gen = sellLoopGen
 	task.spawn(function()
 		print("[MS] AutoSell started")
-		while Toggles["AutoSell"] and gen == sellLoopGen do
+				-- IMMEDIATE SELL: if inv is already > 0, do a sell trip right away
+						task.spawn(function()
+			task.wait(0.5)
+			pcall(function()
+				if gen ~= sellLoopGen then return end
+				local char = LocalPlayer.Character
+				local hrp = char and char:FindFirstChild("HumanoidRootPart")
+				if not hrp then return end
+								local curInv = select(1, GetInventoryAmount())
+				if curInv and curInv > 0 then
+					local SavedPosition = hrp.Position
+					local SavedText = InventoryAmount and InventoryAmount.Text or ""
+					HopOntoSellPad()
+					local t0 = os.clock()
+					while InventoryAmount and InventoryAmount.Text == SavedText
+						and os.clock() - t0 < 5
+						and Toggles["AutoSell"] do
+						task.wait(0.15)
+					end
+					local c2 = LocalPlayer.Character
+					local h2 = c2 and c2:FindFirstChild("HumanoidRootPart")
+					if h2 then
+						h2.Anchored = true
+						h2.CFrame = CFrame.new(SavedPosition)
+						task.wait(0.1)
+						h2.Anchored = false
+					end
+					print("[MS] Immediate sell trip done")
+				end
+			end)
+		end)
+
+				while getgenv().__MS_Gen == myGen do
 			local ok, err = pcall(function()
+				if not Toggles["AutoSell"] then task.wait(0.5) return end
 				if not Remote then EnsureRemote() end
 				if (rebirthDigging and Toggles["AutoRebirth"]) or areaTransit or recovering or collapseRecovering then
 					task.wait(0.5)
@@ -330,31 +639,33 @@ local function StartAutoSell()
 				local Character = LocalPlayer.Character
 				local HumanoidRootPart = Character and Character:FindFirstChild("HumanoidRootPart")
 				if not HumanoidRootPart then task.wait(0.5) return end
-				if sellTrip then task.wait(0.3) return end
+								if sellTrip then 
+					if os.clock() - sellDbgAt > 5 then
+						sellDbgAt = os.clock()
+						print("[MS] sellTrip stuck at true — waiting")
+					end
+					task.wait(0.3) 
+					return 
+				end
 				local curInv, curMax = GetInventoryAmount()
 				if not curMax or curMax <= 0 then task.wait(0.5) return end
-				local triggerAt = math.floor(curMax * 0.95)
-				if curInv >= triggerAt then
-					local SavedPosition = HumanoidRootPart.Position
-					local sold = false
-					sellTrip = true
-					print("[MS] Selling: inv " .. tostring(curInv) .. "/" .. tostring(curMax) .. " trigger at " .. tostring(triggerAt))
-					local sellStartTime = os.clock()
-					while os.clock() - sellStartTime < 8 and not recovering and not collapseRecovering do
-						local freshChar = LocalPlayer.Character
-						local freshHRP = freshChar and freshChar:FindFirstChild("HumanoidRootPart")
-						if not freshHRP then break end
-						freshHRP.CFrame = SellArea
-						task.wait(0.3)
-						Remote:FireServer("SellItems", {{}})
-						task.wait(0.4)
-						local nowInv = GetInventoryAmount()
-						if nowInv < triggerAt then
-							sold = true
-							break
+				-- Sell as soon as backpack is 100% full (like old script)
+				-- If you set a Sell Threshold in the UI, that value overrides
+				local triggerAt = SELL_TRESHOLD or curMax
+														
+						if curInv >= triggerAt then
+						local SavedPosition = HumanoidRootPart.Position
+											local SavedText = InventoryAmount and InventoryAmount.Text or ""
+						local sellStartTime = os.clock()
+						HopOntoSellPad()
+						while InventoryAmount and InventoryAmount.Text == SavedText
+							and os.clock() - sellStartTime < 5
+							and not recovering and not collapseRecovering
+							and Toggles["AutoSell"]
+						do
+							task.wait(0.15)
 						end
-					end
-					if sold then
+					if true then
 						local freshChar = LocalPlayer.Character
 						local freshHRP = freshChar and freshChar:FindFirstChild("HumanoidRootPart")
 						if freshHRP then
@@ -369,12 +680,12 @@ local function StartAutoSell()
 					end
 					sellTrip = false
 					print("[MS] Sell trip done: inv now " .. tostring(select(1, GetInventoryAmount())) .. " coins " .. tostring(GetCoinsAmount()))
-				else
+								else
 					if os.clock() - sellDbgAt > 15 then
 						sellDbgAt = os.clock()
 						print("[MS] AutoSell waiting: inv " .. tostring(curInv) .. "/" .. tostring(curMax) .. " | trigger " .. tostring(triggerAt) .. " | remote " .. tostring(Remote ~= nil))
 					end
-					task.wait(0.5)
+					task.wait(0.25)   -- poll faster so we catch the moment it fills
 				end
 			end)
 			if not ok then
@@ -473,53 +784,28 @@ local function StartAutoRebirth()
 							Remote:FireServer("MineBlock", {{block.Parent}})
 							task.wait()
 						end
-						if #parts > 0 then lastMineSpot = HumanoidRootPart.Position TrackArea() end
-						if false then task.wait(0.3) else
-    local SavedPosition = HumanoidRootPart.Position
-    local sold = false
-    sellTrip = true
-    local _, packMaxNow = GetInventoryAmount()
-    local triggerAt = packMaxNow and math.floor(packMaxNow * 0.95) or 200
-    local sellStartTime = os.clock()
-    while os.clock() - sellStartTime < 8 and not recovering and not collapseRecovering do
-        local nowInv = GetInventoryAmount()
-        if nowInv < triggerAt then sold = true break end
-        HumanoidRootPart.CFrame = SellArea
-        task.wait(0.3)
-        Remote:FireServer("SellItems", {{}})
-        task.wait(0.4)
-    end
-    if sold then
-        local freshChar = LocalPlayer.Character
-        local freshHRP = freshChar and freshChar:FindFirstChild("HumanoidRootPart")
-        if freshHRP then
-            for _ = 1, 5 do
-                freshHRP.CFrame = CFrame.new(SavedPosition)
-                task.wait(0.3)
-                freshChar = LocalPlayer.Character
-                freshHRP = freshChar and freshChar:FindFirstChild("HumanoidRootPart")
-                if freshHRP and (freshHRP.Position - SavedPosition).Magnitude <= 20 then break end
-            end
-        end
-    end
-    sellTrip = false
-end
-
-						if sold then
-							local freshChar = LocalPlayer.Character
-							local freshHRP = freshChar and freshChar:FindFirstChild("HumanoidRootPart")
-							if freshHRP then
-								for _ = 1, 3 do
-									freshHRP.CFrame = CFrame.new(SavedPosition)
-									task.wait(0.3)
-									freshChar = LocalPlayer.Character
-									freshHRP = freshChar and freshChar:FindFirstChild("HumanoidRootPart")
-									if freshHRP and (freshHRP.Position - SavedPosition).Magnitude <= 15 then break end
-								end
-							end
+												if #parts > 0 then lastMineSpot = HumanoidRootPart.Position TrackArea() end
+																																												if sellTrip then task.wait(0.3) else
+						local SavedPosition = HumanoidRootPart.Position
+						local SavedText = InventoryAmount and InventoryAmount.Text or ""
+						local sellStartTime = os.clock()
+						HopOntoSellPad()
+						while InventoryAmount and InventoryAmount.Text == SavedText
+							and os.clock() - sellStartTime < 5
+							and not recovering and not collapseRecovering
+						do
+							task.wait(0.15)
+						end
+						local freshChar = LocalPlayer.Character
+						local freshHRP = freshChar and freshChar:FindFirstChild("HumanoidRootPart")
+						if freshHRP then
+							freshHRP.Anchored = true
+							freshHRP.CFrame = CFrame.new(SavedPosition)
+							task.wait(0.1)
+							freshHRP.Anchored = false
 						end
 						sellTrip = false
-						end
+					end
 					end
 				end
 				task.wait()
@@ -1055,8 +1341,7 @@ local function StartAutoTools()
 	end)
 end
 
-local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
-
+local WindUI = loadstring(game:HttpGet("https://cdn.jsdelivr.net/gh/Footagesus/WindUI@main/dist/main.lua"))()
 local function StopAreaRun()
 	areaRunId = areaRunId + 1
 	areaPhaseText = "off"
@@ -1329,14 +1614,191 @@ local Window = WindUI:CreateWindow({
 	Folder = "MiningSimGui",
 	Size = UDim2.fromOffset(520, 420),
 	Theme = "Dark",
-	ToggleKey = Enum.KeyCode.LeftShift,
+		ToggleKey = Enum.KeyCode.LeftShift,
 })
 getgenv().__MS_WindUIWindow = Window
+
+task.spawn(function()
+	task.wait(1.2)
+	PaintWindow(getgenv().__MS_Color or "Pink")
+end)
 
 local MineTab = Window:Tab({ Title = "Mining", Icon = "pickaxe" })
 local SellTab = Window:Tab({ Title = "Sell", Icon = "coins" })
 local MiscTab = Window:Tab({ Title = "Shop / Rebirth", Icon = "settings" })
 local AreasTab = Window:Tab({ Title = "Areas", Icon = "map" })
+local AFKTab = Window:Tab({ Title = "AFK", Icon = "clock" })
+
+-- ===== ANTI-AFK SYSTEM =====
+local AFK_Conn = nil
+local AFK_Panel = nil
+local AFK_StatusLbl = nil
+local AFK_Btn = nil
+local AFK_ToggleRef = nil
+
+local function StartAntiAFK()
+	if AFK_Conn then AFK_Conn:Disconnect() end
+	AFK_Conn = LocalPlayer.Idled:Connect(function()
+		pcall(function()
+			local VU = game:GetService("VirtualUser")
+			VU:CaptureController()
+			VU:ClickButton2(Vector2.new())
+		end)
+	end)
+	if AFK_StatusLbl then AFK_StatusLbl.Text = "Status: Active" end
+	if AFK_Btn then AFK_Btn.Text = "Disable" end
+	print("[MS] Anti-AFK enabled")
+end
+
+local function StopAntiAFK()
+	if AFK_Conn then
+		AFK_Conn:Disconnect()
+		AFK_Conn = nil
+	end
+	if AFK_StatusLbl then AFK_StatusLbl.Text = "Status: Inactive" end
+	if AFK_Btn then AFK_Btn.Text = "Enable" end
+	print("[MS] Anti-AFK disabled")
+end
+
+local function BuildAFKPanel()
+	if AFK_Panel then return end
+
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "MS_AFK_Panel"
+	gui.ResetOnSpawn = false
+	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+	local frame = Instance.new("Frame")
+	frame.Name = "Panel"
+	frame.Size = UDim2.fromOffset(220, 120)
+	frame.Position = UDim2.fromOffset(40, 40)
+	frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+	frame.BorderSizePixel = 0
+	frame.Active = true
+	frame.Draggable = true
+	frame.Parent = gui
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 8)
+	corner.Parent = frame
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.fromRGB(60, 60, 60)
+	stroke.Thickness = 1
+	stroke.Parent = frame
+
+	local title = Instance.new("TextLabel")
+	title.Name = "Title"
+	title.Size = UDim2.new(1, 0, 0, 32)
+	title.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+	title.BorderSizePixel = 0
+	title.Text = "Anti-AFK Script"
+	title.TextColor3 = Color3.fromRGB(80, 220, 120)
+	title.Font = Enum.Font.GothamBold
+	title.TextSize = 15
+	title.Parent = frame
+
+	local titleCorner = Instance.new("UICorner")
+	titleCorner.CornerRadius = UDim.new(0, 8)
+	titleCorner.Parent = title
+
+	local status = Instance.new("TextLabel")
+	status.Name = "Status"
+	status.Size = UDim2.new(1, -20, 0, 24)
+	status.Position = UDim2.new(0, 10, 0, 40)
+	status.BackgroundTransparency = 1
+	status.Text = "Status: Inactive"
+	status.TextColor3 = Color3.fromRGB(80, 220, 120)
+	status.Font = Enum.Font.Gotham
+	status.TextSize = 14
+	status.Parent = frame
+
+	local btn = Instance.new("TextButton")
+	btn.Name = "ToggleBtn"
+	btn.Size = UDim2.new(1, -40, 0, 32)
+	btn.Position = UDim2.new(0, 20, 1, -46)
+	btn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+	btn.BorderSizePixel = 0
+	btn.Text = "Enable"
+	btn.TextColor3 = Color3.fromRGB(240, 240, 240)
+	btn.Font = Enum.Font.GothamBold
+	btn.TextSize = 14
+	btn.Parent = frame
+
+	local btnCorner = Instance.new("UICorner")
+	btnCorner.CornerRadius = UDim.new(0, 6)
+	btnCorner.Parent = btn
+
+	local footer = Instance.new("TextLabel")
+	footer.Name = "Footer"
+	footer.Size = UDim2.new(1, 0, 0, 16)
+	footer.Position = UDim2.new(0, 0, 1, -18)
+	footer.BackgroundTransparency = 1
+	footer.Text = "Made by Genesis_UI"
+	footer.TextColor3 = Color3.fromRGB(120, 120, 120)
+	footer.Font = Enum.Font.Gotham
+	footer.TextSize = 11
+	footer.Parent = frame
+
+	AFK_Panel = gui
+	AFK_StatusLbl = status
+	AFK_Btn = btn
+
+	btn.MouseButton1Click:Connect(function()
+		if AFK_Conn then
+			-- currently on -> turn off
+			StopAntiAFK()
+			if AFK_ToggleRef then
+				pcall(function() AFK_ToggleRef:Set(false) end)
+			end
+		else
+			-- currently off -> turn on
+			StartAntiAFK()
+			if AFK_ToggleRef then
+				pcall(function() AFK_ToggleRef:Set(true) end)
+			end
+		end
+	end)
+end
+
+local function ShowAFKPanel()
+	BuildAFKPanel()
+	if AFK_Panel then AFK_Panel.Enabled = true end
+end
+
+local function HideAFKPanel()
+	if AFK_Panel then AFK_Panel.Enabled = false end
+end
+-- ===== END ANTI-AFK SYSTEM =====
+
+local AFKToggle = AFKTab:Toggle({
+	Title = "Anti-AFK",
+	Desc = "Prevents getting kicked for being idle",
+	Value = false,
+	Callback = function(state)
+		Toggles["AntiAFK"] = state
+		if state then
+			ShowAFKPanel()
+			StartAntiAFK()
+		else
+			StopAntiAFK()
+			HideAFKPanel()
+		end
+	end
+})
+AFK_ToggleRef = AFKToggle
+
+AreasTab:Dropdown({
+	Title = "Theme Color",
+	Desc = "Change the GUI color",
+	Values = { "Pink", "HotPink", "Purple", "Blue", "Cyan", "Green", "Red", "Orange", "Yellow", "White" },
+	Value = getgenv().__MS_Color or "Pink",
+	Callback = function(selected)
+		getgenv().__MS_Color = selected
+		PaintWindow(selected)
+	end
+})
 
 MineTab:Toggle({
 	Title = "Auto Mine (straight down)",
@@ -1379,6 +1841,16 @@ SellTab:Toggle({
 	Callback = function(state)
 		Toggles["AutoSell"] = state
 		if state then StartAutoSell() end
+	end
+})
+
+SellTab:Toggle({
+	Title = "SV Sell",
+	Desc = "Test toggle — same sell logic as Auto Sell",
+	Value = false,
+	Callback = function(state)
+		Toggles["SVSell"] = state
+		if state then StartSVSell() end
 	end
 })
 
