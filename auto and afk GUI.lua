@@ -373,6 +373,26 @@ local function GetSellPadPos()
 	return Vector3.new(56, 14, 30176)
 end
 
+-- Counts blocks near a position. Used by sell logic to refuse teleporting
+-- back into a collapsed/empty spot. Returns -1 on error, 0 if empty.
+local function BlocksNear(pos, radius, maxParts)
+	local ok, parts = pcall(function()
+		local region = Region3.new(pos - Vector3.new(radius, radius, radius), pos + Vector3.new(radius, radius, radius))
+		return workspace:FindPartsInRegion3WithWhiteList(region, {game.Workspace.Blocks}, maxParts or 10)
+	end)
+	if ok and type(parts) == "table" then return #parts end
+	return -1
+end
+
+-- True if the game's Collapsed flag is currently set.
+local function IsCollapsed()
+	local col = false
+	pcall(function()
+		local c = workspace:FindFirstChild("Collapsed")
+		col = c and c.Value == true
+	end)
+	return col
+end
 local function HopOntoSellPad()
 	local char = LocalPlayer.Character
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -543,9 +563,10 @@ local function StartSVSell()
 	local gen = svSellLoopGen
 	task.spawn(function()
 		print("[MS] SVSell started")
-		while getgenv().__MS_Gen == myGen do
+				while getgenv().__MS_Gen == myGen do
 			local ok, err = pcall(function()
 				if not Toggles["SVSell"] then task.wait(0.5) return end
+				if collapseRecovering or recovering or areaTransit then task.wait(0.5) return end
 				if not Remote then EnsureRemote() end
 				if not Remote then task.wait(1) return end
 				local curInv, curMax = GetInventoryAmount()
@@ -566,10 +587,14 @@ local function StartSVSell()
 							Remote:FireServer("SellItems", {{}})
 							task.wait(0.1)
 						end
-						HumanoidRootPart.Anchored = true
-						HumanoidRootPart.CFrame = SavedLocation
-						task.wait(0.1)
-						HumanoidRootPart.Anchored = false
+												if IsCollapsed() or BlocksNear(SavedLocation.Position, 8, 5) == 0 then
+							print("[MS] SVSell: saved spot collapsed/empty — staying put, recovery will reposition")
+						else
+							HumanoidRootPart.Anchored = true
+							HumanoidRootPart.CFrame = SavedLocation
+							task.wait(0.1)
+							HumanoidRootPart.Anchored = false
+						end
 						print("[MS] SVSell trip done: inv now " .. tostring(select(1, GetInventoryAmount())) .. " coins " .. tostring(GetCoinsAmount()))
 					end
 				else
@@ -614,13 +639,17 @@ local function StartAutoSell()
 						and Toggles["AutoSell"] do
 						task.wait(0.15)
 					end
-					local c2 = LocalPlayer.Character
+										local c2 = LocalPlayer.Character
 					local h2 = c2 and c2:FindFirstChild("HumanoidRootPart")
 					if h2 then
-						h2.Anchored = true
-						h2.CFrame = CFrame.new(SavedPosition)
-						task.wait(0.1)
-						h2.Anchored = false
+						if IsCollapsed() or BlocksNear(SavedPosition, 8, 5) == 0 then
+							print("[MS] AutoSell immediate: saved spot collapsed/empty — staying put")
+						else
+							h2.Anchored = true
+							h2.CFrame = CFrame.new(SavedPosition)
+							task.wait(0.1)
+							h2.Anchored = false
+						end
 					end
 					print("[MS] Immediate sell trip done")
 				end
@@ -665,7 +694,9 @@ local function StartAutoSell()
 						do
 							task.wait(0.15)
 						end
-					if true then
+										if IsCollapsed() or BlocksNear(SavedPosition, 8, 5) == 0 then
+						print("[MS] AutoSell: saved spot collapsed/empty — staying put, recovery will reposition")
+					else
 						local freshChar = LocalPlayer.Character
 						local freshHRP = freshChar and freshChar:FindFirstChild("HumanoidRootPart")
 						if freshHRP then
@@ -796,13 +827,17 @@ local function StartAutoRebirth()
 						do
 							task.wait(0.15)
 						end
-						local freshChar = LocalPlayer.Character
-						local freshHRP = freshChar and freshChar:FindFirstChild("HumanoidRootPart")
-						if freshHRP then
-							freshHRP.Anchored = true
-							freshHRP.CFrame = CFrame.new(SavedPosition)
-							task.wait(0.1)
-							freshHRP.Anchored = false
+												if IsCollapsed() or BlocksNear(SavedPosition, 8, 5) == 0 then
+							print("[MS] AutoRebirth: saved spot collapsed/empty — staying put, recovery will reposition")
+						else
+							local freshChar = LocalPlayer.Character
+							local freshHRP = freshChar and freshChar:FindFirstChild("HumanoidRootPart")
+							if freshHRP then
+								freshHRP.Anchored = true
+								freshHRP.CFrame = CFrame.new(SavedPosition)
+								task.wait(0.1)
+								freshHRP.Anchored = false
+							end
 						end
 						sellTrip = false
 					end
@@ -1470,19 +1505,11 @@ local function StartAreaRun(area)
 end
 
 local collapseGen = 0
-local function BlocksNear(pos, radius, maxParts)
-	local ok, parts = pcall(function()
-		local region = Region3.new(pos - Vector3.new(radius, radius, radius), pos + Vector3.new(radius, radius, radius))
-		return workspace:FindPartsInRegion3WithWhiteList(region, {game.Workspace.Blocks}, maxParts or 10)
-	end)
-	if ok and type(parts) == "table" then return #parts end
-	return -1
-end
 
 local function RecoverFromCollapse(reason)
+	if collapseRecovering then return end
 	collapseGen = collapseGen + 1
 	local gen = collapseGen
-	if collapseRecovering then return end
 	if not (Toggles["AutoMine"] or Toggles["FastMine"] or Toggles["AutoRebirth"] or Toggles["AutoSell"]) then return end
 
 	collapseRecovering = true
@@ -1491,20 +1518,14 @@ local function RecoverFromCollapse(reason)
 
 	print("[MS] Collapse detected (" .. tostring(reason) .. "). Moving forward for 7s then resuming...")
 	areaPhaseText = "collapsed: moving forward..."
-
 	task.spawn(function()
-		for _ = 1, 30 do
-			if gen ~= collapseGen then return end
+		areaPhaseText = "collapsed: waiting 15s for respawn..."
+		print("[MS] Collapse: waiting 15s for respawn...")
+		local waitStart = os.clock()
+		while gen == collapseGen and os.clock() - waitStart < 15 do
 			task.wait(0.5)
-			local done = false
-			pcall(function()
-				local col = workspace:FindFirstChild("Collapsed")
-				if not col or col.Value ~= true then done = true end
-			end)
-			if done then break end
 		end
 		if gen ~= collapseGen then return end
-
 		for _ = 1, 20 do
 			if gen ~= collapseGen then return end
 			if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then break end
