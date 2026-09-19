@@ -368,7 +368,7 @@ local function GetSellPadPos()
 	if lastAreaName and SELL_PADS[lastAreaName] then
 		return SELL_PADS[lastAreaName]
 	end
-	return Vector3.new(56, 14, 30176)
+	return Vector3.new(-116, 13, 38)
 end
 
 -- Counts blocks near a position. Used by sell logic to refuse teleporting
